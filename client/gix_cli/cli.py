@@ -178,6 +178,8 @@ def cmd_upload(a):
 def cmd_download(a):
     src = nas_path(a.path)
     local = Path(a.to or ".")
+    # scp renames instead of copying into a folder that doesn't exist yet
+    local.mkdir(parents=True, exist_ok=True)
     print(f"Downloading {src} -> {local.resolve()}", flush=True)
     return scp(f"{LOGIN}:{src}", str(local))
 

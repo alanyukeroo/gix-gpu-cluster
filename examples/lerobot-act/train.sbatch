@@ -23,6 +23,12 @@ BATCH=8
 IMAGE=docker.io/huggingface/lerobot-gpu:latest
 
 set -o pipefail
+if [ ! -f "$DATASET/meta/info.json" ]; then
+    echo "ERROR: no LeRobot dataset at $DATASET (expected $DATASET/meta/info.json)."
+    echo "Folders with a dataset in this project:"
+    find . -path ./outputs -prune -o -name info.json -path '*/meta/*' -print | sed 's|^\./||; s|/meta/info.json$||; s|^|  |'
+    exit 1
+fi
 NAME=${POLICY}-${SLURM_JOB_ID}
 # LeRobot writes checkpoints with symlinks, which the NAS doesn't support. So training writes to the
 # node's local disk, and outputs/ on the NAS gets a copy every 10 minutes and when the job ends.
