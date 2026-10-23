@@ -202,6 +202,21 @@ Changed your code? Run `gix upload my-project` again. It overwrites the files on
 
 ---
 
+### Examples
+
+| Folder | What it trains | Container |
+|---|---|---|
+| [`examples/cifar10`](examples/cifar10) | Image classifier (your first job) | PyTorch |
+| [`examples/lerobot-act`](examples/lerobot-act) | Robot policy (ACT, Diffusion, …) on a dataset you recorded with LeRobot | Official LeRobot image |
+| [`examples/train.sbatch`](examples/train.sbatch) | Template for your own code | PyTorch, or any image |
+
+**LeRobot:** copy your recorded dataset (the folder with `meta/`, `data/`, `videos/`) into
+`lerobot-act/data/`, set `DATASET=` in `train.sbatch`, then `gix upload lerobot-act` and
+`gix submit lerobot-act/train.sbatch`. Checkpoints appear in `lerobot-act/outputs/` every 10 minutes
+and at the end; get them with `gix download lerobot-act/outputs`.
+
+---
+
 ## Cheat sheet
 
 | Command | What it does |
