@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+# gix: student commands for the GIX GPU cluster, run on gix-login.
+# The `gix` package on student laptops forwards to this over SSH:
+#   gix status   ->   ssh gix-login gix status
+#
+# Install on the login host: /usr/local/bin/gix (chmod 755)
+#
+#   gix submit <job.sbatch>   submit a job (path relative to your NAS folder, or absolute)
+#   gix status                your jobs: queued, running, recently finished
+#   gix logs <jobid> [-f]     show (or follow) a job's output
+#   gix cancel <jobid|all>    cancel a job
+#   gix whoami                your NetID and NAS folder
+
+set -euo pipefail
+
+NAS_ROOT="${GIX_NAS_ROOT:-/mnt/qnap}"
+NAS_HOME="$NAS_ROOT/$USER"
+STATE_DIR="$HOME/.gix"
+JOBS_FILE="$STATE_DIR/jobs.tsv"     # jobid <TAB> name <TAB> stdout path <TAB> submitted
+
+die() { echo "gix: $*" >&2; exit 1; }
+
+usage() {
+    cat <<EOF
+usage: gix <command>
+
+  submit <job.sbatch>     submit a job (path relative to $NAS_HOME, or absolute)
+  status                  your jobs: queued, running, recently finished
+  logs <jobid> [-f]       show the end of a job's output (-f: follow it live)
+  cancel <jobid|all>      cancel a job, or all your jobs
+  whoami                  your NetID and NAS folder
+EOF
+}
+
+ensure_nas_home() {
+    [[ -d "$NAS_HOME" ]] || mkdir -p "$NAS_HOME" 2>/dev/null || die "could not create your NAS folder $NAS_HOME (ask staff)"
+}
+
+resolve_path() {
+    local p="$1"
+    p="${p/#\~/$HOME}"
+    [[ "$p" == /* ]] || p="$NAS_HOME/$p"
+    realpath -m -- "$p"
+}
+
+record_job() {
+    mkdir -p "$STATE_DIR"
+    printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$(date '+%Y-%m-%d %H:%M')" >> "$JOBS_FILE"
+}
+
+# prints "position total" for a pending job among all pending jobs in its partition
+queue_position() {
+    local id="$1" part pos total
+    part="$(squeue -h -j "$id" -o %P 2>/dev/null)" || return 0
+    mapfile -t ids < <(squeue -h -t PD -p "$part" --sort=-p,i -o %i)
+    total=${#ids[@]}
+    for i in "${!ids[@]}"; do
+        if [[ "${ids[$i]}" == "$id" ]]; then pos=$((i + 1)); echo "$pos $total"; return; fi
+    done
+}
+
+human_reason() {
+    case "$1" in
+        Resources)            echo "waiting for a free GPU" ;;
+        Priority)             echo "waiting, other jobs are ahead of you" ;;
+        ReqNodeNotAvail*)     echo "the requested node is not available" ;;
+        QOSMax*|AssocMax*)    echo "you reached your job limit" ;;
+        None|"")              echo "starting" ;;
+        *)                    echo "$1" ;;
+    esac
+}
+
+cmd_submit() {
+    [[ $# -ge 1 ]] || die "usage: gix submit <job.sbatch>"
+    local script dir out id name stdout
+    ensure_nas_home
+    script="$(resolve_path "$1")"
+    shift
+    [[ -f "$script" ]] || die "file not found: $script
+  (paths are relative to your NAS folder $NAS_HOME)"
+    dir="$(dirname "$script")"
+
+    # run in the script's folder, so relative paths in the job (data/, outputs/) work.
+    # The job inherits this login session's environment: drop the login host's runtime dir
+    # (it doesn't exist on the node, rootless podman fails on it) and use the same per-user
+    # container storage as SSH sessions on the nodes (see /etc/containers/storage-user.conf).
+    out="$(cd "$dir" && env -u XDG_RUNTIME_DIR -u DBUS_SESSION_BUS_ADDRESS \
+        CONTAINERS_STORAGE_CONF=/etc/containers/storage-user.conf \
+        sbatch --parsable "$@" "$script" 2>&1)" || die "$out"
+    id="${out%%;*}"
+    name="$(squeue -h -j "$id" -o %j 2>/dev/null || basename "$script")"
+    stdout="$(scontrol show job -o "$id" 2>/dev/null | grep -o 'StdOut=[^ ]*' | cut -d= -f2-)"
+    record_job "$id" "$name" "${stdout:-$dir/slurm-$id.out}"
+
+    local gres
+    gres="$(scontrol show job -o "$id" 2>/dev/null | grep -o 'TresPerNode=[^ ]*' | cut -d= -f2- | sed 's/gres\///g')"
+    echo "Job $id submitted ($name${gres:+, $gres})"
+    local state
+    state="$(squeue -h -j "$id" -o %T 2>/dev/null || true)"
+    if [[ "$state" == PENDING ]]; then
+        read -r pos total < <(queue_position "$id") || true
+        [[ -n "${pos:-}" ]] && echo "Queue position: $pos of $total. It starts by itself when a GPU is free."
+    elif [[ -n "$state" ]]; then
+        echo "State: $state"
+    fi
+    echo "Output: ${stdout:-$dir/slurm-$id.out}"
+    echo "Check it:  gix status   |   gix logs $id"
+}
+
+cmd_status() {
+    local lines
+    lines="$(squeue -h -u "$USER" -o '%i|%j|%T|%N|%M|%l|%r|%b' --sort=i)"
+    if [[ -z "$lines" ]]; then
+        echo "No queued or running jobs."
+    else
+        printf '%-7s %-20s %-9s %-14s %-19s %s\n' JOB NAME STATE WHERE "TIME / LIMIT" GPU
+        while IFS='|' read -r id name state node elapsed limit reason gres; do
+            local where="$node" note=""
+            [[ "$name" == devc-* ]] && name="(VS Code session)"
+            gres="${gres//gres\//}"; gres="${gres//gres:/}"
+            if [[ "$state" == PENDING ]]; then
+                where="-"
+                read -r pos total < <(queue_position "$id") || true
+                note="  ← $(human_reason "$reason")${pos:+, position $pos of $total}"
+            fi
+            printf '%-7s %-20.20s %-9s %-14s %-19s %s%s\n' \
+                "$id" "$name" "$state" "$where" "$elapsed / $limit" "${gres:-none}" "$note"
+        done <<< "$lines"
+    fi
+
+    # recently submitted jobs that are no longer in the queue
+    [[ -f "$JOBS_FILE" ]] || return 0
+    local recent
+    recent="$(tail -n 20 "$JOBS_FILE" | while IFS=$'\t' read -r id name out when; do
+        [[ -n "$(squeue -h -j "$id" -o %i 2>/dev/null)" ]] && continue
+        printf '%-7s %-20.20s submitted %s   gix logs %s\n' "$id" "$name" "$when" "$id"
+    done | tail -n 5)"
+    if [[ -n "$recent" ]]; then
+        echo
+        echo "Recent jobs (finished or cancelled):"
+        echo "$recent"
+    fi
+}
+
+stdout_of() {
+    local id="$1" out
+    out="$(scontrol show job -o "$id" 2>/dev/null | grep -o 'StdOut=[^ ]*' | cut -d= -f2-)" || true
+    if [[ -z "$out" && -f "$JOBS_FILE" ]]; then
+        out="$(awk -F'\t' -v id="$id" '$1 == id { o = $3 } END { print o }' "$JOBS_FILE")"
+    fi
+    echo "$out"
+}
+
+cmd_logs() {
+    [[ $# -ge 1 ]] || die "usage: gix logs <jobid> [-f]"
+    local id="$1" follow=0 out
+    [[ "${2:-}" == "-f" ]] && follow=1
+    [[ "$id" =~ ^[0-9]+$ ]] || die "job id must be a number"
+    if owner="$(squeue -h -j "$id" -o %u 2>/dev/null)" && [[ -n "$owner" && "$owner" != "$USER" ]]; then
+        die "job $id is not yours"
+    fi
+    out="$(stdout_of "$id")"
+    [[ -n "$out" ]] || die "don't know job $id (only jobs submitted with gix, or still in the queue)"
+    local in_queue
+    in_queue="$(squeue -h -j "$id" -o %i 2>/dev/null || true)"
+    if (( follow )) && [[ -n "$in_queue" ]]; then
+        echo "== $out (following until job $id ends; Ctrl+C to stop watching, the job keeps running)" >&2
+        [[ -f "$out" ]] || echo "Job $id has not started yet, waiting for output..." >&2
+        # watcher exits when the job leaves the queue; tail --pid stops with it.
+        # Polling instead of inotify: the output usually lives on the NAS (CIFS), where
+        # inotify doesn't see writes made by the compute node.
+        ( while [[ -n "$(squeue -h -j "$id" -o %i 2>/dev/null)" ]]; do sleep 5; done ) &
+        WATCHER=$!
+        trap 'kill "$WATCHER" 2>/dev/null' EXIT
+        tail -n 50 -F -s 2 ---disable-inotify --pid="$WATCHER" "$out" 2>/dev/null || true
+        echo "== job $id has ended" >&2
+        return 0
+    fi
+    if [[ ! -f "$out" ]]; then
+        if [[ "$(squeue -h -j "$id" -o %T 2>/dev/null)" == PENDING ]]; then
+            echo "Job $id has not started yet, no output so far. (gix status)"
+        else
+            echo "No output file yet: $out"
+        fi
+        return 0
+    fi
+    echo "== $out" >&2
+    tail -n 50 "$out"
+    [[ -z "$in_queue" ]] || echo "== job $id is still running (gix logs $id -f to follow it)" >&2
+}
+
+cmd_cancel() {
+    [[ $# -ge 1 ]] || die "usage: gix cancel <jobid|all>"
+    if [[ "$1" == all ]]; then
+        scancel -u "$USER" && echo "Cancelled all your jobs."
+        return
+    fi
+    [[ "$1" =~ ^[0-9]+$ ]] || die "job id must be a number"
+    local owner
+    owner="$(squeue -h -j "$1" -o %u 2>/dev/null || true)"
+    [[ -n "$owner" ]] || die "job $1 is not queued or running"
+    [[ "$owner" == "$USER" ]] || die "job $1 is not yours"
+    scancel "$1" && echo "Cancelled job $1."
+}
+
+cmd_whoami() {
+    ensure_nas_home
+    echo "NetID:      $USER"
+    echo "NAS folder: $NAS_HOME"
+}
+
+# used by `gix upload/download` on the laptop: absolute path of a NAS-relative path
+cmd_nas_path() {
+    ensure_nas_home
+    if [[ $# -ge 1 ]]; then resolve_path "$1"; else echo "$NAS_HOME"; fi
+}
+
+case "${1:-}" in
+    submit) shift; cmd_submit "$@" ;;
+    status) shift; cmd_status "$@" ;;
+    logs)   shift; cmd_logs "$@" ;;
+    cancel) shift; cmd_cancel "$@" ;;
+    whoami) shift; cmd_whoami "$@" ;;
+    nas-path) shift; cmd_nas_path "$@" ;;
+    -h|--help|help|"") usage ;;
+    *) usage >&2; exit 2 ;;
+esac

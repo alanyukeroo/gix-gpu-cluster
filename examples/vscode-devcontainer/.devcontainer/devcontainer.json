@@ -1,0 +1,38 @@
+// GIX GPU cluster: example devcontainer (PyTorch + CUDA 12.8 for the RTX 5090).
+// Runs with rootless Podman inside your Slurm job, so the job's GPU/CPU/RAM limits apply.
+{
+    "name": "gix-pytorch-demo",
+
+    // CUDA >= 12.8 is required for the RTX 5090 (Blackwell, sm_120)
+    "image": "docker.io/pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime",
+
+    "runArgs": [
+        // you are uid 1000 inside the container; files you create belong to your NetID outside
+        "--userns=keep-id:uid=1000,gid=1000",
+        // GPU through CDI (Slurm still only lets you use the GPU share of your job)
+        "--device=nvidia.com/gpu=all",
+        // PyTorch DataLoader workers need more than the 64 MB default
+        "--shm-size=8g",
+        "-e", "NVIDIA_DRIVER_CAPABILITIES=compute,utility"
+    ],
+    // not allowed on the cluster: --privileged, --gpus, -v /dev:/dev, docker.sock mounts
+
+    // the image has no home for uid 1000; VS Code needs a writable one
+    "containerEnv": { "HOME": "/tmp/home" },
+    "postCreateCommand": "mkdir -p /tmp/home && python -c \"import torch; print('GPU:', torch.cuda.get_device_name())\"",
+
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+    "workspaceFolder": "/workspace",
+    "updateRemoteUserUID": false,
+
+    "customizations": {
+        "vscode": {
+            "extensions": ["ms-python.python", "ms-toolsai.jupyter"],
+            // the image has no user for uid 1000, so VS Code would open /bin/sh (no Tab completion)
+            "settings": {
+                "terminal.integrated.defaultProfile.linux": "bash",
+                "terminal.integrated.profiles.linux": { "bash": { "path": "/bin/bash" } }
+            }
+        }
+    }
+}

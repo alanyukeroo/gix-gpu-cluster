@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gix-cli"
+version = "0.2.0"
+description = "Submit and follow GPU jobs on the GIX cluster from your laptop"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+gix = "gix_cli.cli:main"
+
+[tool.setuptools]
+packages = ["gix_cli"]
