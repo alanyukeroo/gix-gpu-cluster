@@ -94,6 +94,25 @@ Done. Try:  gix status
 
 ---
 
+## Which way should I train?
+
+All examples run in a container and start with `gix submit`. You don't need to know how containers
+work: the example scripts start them for you, with Python, PyTorch and CUDA already installed.
+
+| You want to... | Example | What you prepare |
+|---|---|---|
+| Try the cluster for the first time | [`examples/cifar10`](examples/cifar10) | Nothing |
+| Train a robot policy with LeRobot | [`examples/lerobot-act`](examples/lerobot-act) | Your recorded dataset |
+| Train your own Python code | [`examples/train.sbatch`](examples/train.sbatch) | `train.py` and `requirements.txt` |
+
+**Without a container (advanced):** this also works, but you set it up yourself. The GPU nodes have
+no PyTorch, and `venv` and `pip` aren't set up for this, so you need your own environment such as
+Miniforge. Each node has its own home folder, so install it on every node your job can land on, or
+keep the job on one node with `#SBATCH --nodelist=<node>`. We recommend a container unless you have
+a specific reason not to.
+
+---
+
 ## 4. Your first job (5 minutes)
 
 Train an image classifier on [CIFAR-10](https://www.cs.toronto.edu/~kriz/cifar.html)
