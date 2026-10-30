@@ -252,7 +252,7 @@ minutes. It is finished when you see `End of training`.
 gix download lerobot-act/outputs
 ```
 
-Your model is in `outputs/act-<job>/run/checkpoints/<step>/pretrained_model/`.
+Your model is in `outputs/act-<job>/checkpoints/<step>/pretrained_model/`.
 
 **If it fails:** `ERROR: no LeRobot dataset at ...` means the dataset is in the wrong folder.
 The message lists the folders it found, so set `DATASET=` in `train.sbatch` to the right one.
