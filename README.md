@@ -210,10 +210,52 @@ Changed your code? Run `gix upload my-project` again. It overwrites the files on
 | [`examples/lerobot-act`](examples/lerobot-act) | Robot policy (ACT, Diffusion, …) on a dataset you recorded with LeRobot | Official LeRobot image |
 | [`examples/train.sbatch`](examples/train.sbatch) | Template for your own code | PyTorch, or any image |
 
-**LeRobot:** copy your recorded dataset (the folder with `meta/`, `data/`, `videos/`) into
-`lerobot-act/data/`, set `DATASET=` in `train.sbatch`, then `gix upload lerobot-act` and
-`gix submit lerobot-act/train.sbatch`. Checkpoints appear in `lerobot-act/outputs/` every 10 minutes
-and at the end; get them with `gix download lerobot-act/outputs`.
+### Train a LeRobot policy
+
+Trains ACT on a dataset you recorded, inside the official LeRobot container.
+Tested with ACT and a LeRobot v3.0 dataset. Other policies and older datasets may need changes.
+
+**Step 1. Put your dataset in the example folder.** Name the folder `my-dataset`, and you don't
+need to edit anything:
+
+```
+examples/lerobot-act/
+├── train.sbatch
+└── data/my-dataset/
+    ├── meta/
+    ├── data/
+    └── videos/
+```
+
+**Step 2. Optional, for a quick first try:** open `train.sbatch` and set `STEPS=2000` and
+`--gres=shard:1`. The defaults are 50,000 steps on a whole GPU, so you may wait for a free GPU.
+
+**Step 3. Upload and start the job** (from `gix-gpu-cluster/examples`):
+
+```sh
+gix upload lerobot-act
+gix submit lerobot-act/train.sbatch
+```
+
+**Step 4. Watch it**, using the job number from the previous step:
+
+```sh
+gix logs <job> -f
+```
+
+The first run on a node downloads the container (about 6 GB), so it can look stuck for a few
+minutes. It is finished when you see `End of training`.
+
+**Step 5. Get your model:**
+
+```sh
+gix download lerobot-act/outputs
+```
+
+Your model is in `outputs/act-<job>/run/checkpoints/<step>/pretrained_model/`.
+
+**If it fails:** `ERROR: no LeRobot dataset at ...` means the dataset is in the wrong folder.
+The message lists the folders it found, so set `DATASET=` in `train.sbatch` to the right one.
 
 ---
 
