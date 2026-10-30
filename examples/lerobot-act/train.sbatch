@@ -20,7 +20,8 @@ STEPS=50000                         # training steps
 BATCH=8
 
 # Official LeRobot image: PyTorch with CUDA 12.8 (works on the RTX 5090), LeRobot, ffmpeg
-IMAGE=docker.io/huggingface/lerobot-gpu:latest
+# Pinned: :latest changes without notice and has removed flags this script uses
+IMAGE=docker.io/huggingface/lerobot-gpu@sha256:9760904226c7c1c109d3756d356f5987892a279da90477c8426c0581186c893d
 
 set -o pipefail
 if [ ! -f "$DATASET/meta/info.json" ]; then
@@ -57,7 +58,7 @@ podman run --rm \
         --policy.type="$POLICY" \
         --policy.device=cuda \
         --policy.push_to_hub=false \
-        --wandb.enable=false \
+        --trackio.enable=false \
         --output_dir=/scratch/run \
         --batch_size="$BATCH" \
         --steps="$STEPS" \
