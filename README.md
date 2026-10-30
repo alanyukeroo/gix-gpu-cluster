@@ -173,6 +173,8 @@ gix download cifar10/outputs
 
 You now have `outputs/model.pt` (the trained model) and `outputs/metrics.json` (accuracy per epoch). 🎉
 
+Running this example again overwrites these two files, so download or rename anything you want to keep.
+
 ---
 
 ## 5. Run your own project
@@ -219,6 +221,30 @@ gix download my-project/outputs
 
 Changed your code? Run `gix upload my-project` again. It overwrites the files on the cluster.
 
+### d. If a tool or package is missing
+
+Your job only has what's inside its container image, and every image is different. The default PyTorch
+image has Python, `pip` and `conda`, but not `git`, for example. So a project that works on your laptop
+can fail here with an error like:
+
+```
+ERROR: Cannot find command 'git' - do you have 'git' installed and in your PATH?
+```
+
+This is normal, and it's worth learning how to fix, because every project has its own needs:
+
+1. **Read the log.** `gix logs <job>` usually names what's missing. Look for the first error, not the last.
+2. **Find out why it's needed.** Here, a package in `requirements.txt` installs from GitHub (`git+https://...`).
+3. **Add it for your job, or choose another image.** You can't use `sudo` or `apt-get` in these jobs, but
+   `conda` can install tools into a folder you can write to. Add this to the start of `RUN`:
+
+   ```bash
+   RUN='conda create -y -q -p /tmp/tools -c conda-forge git && export PATH=/tmp/tools/bin:$PATH && pip install -q -r requirements.txt && python train.py --data data/ --out outputs/'
+   ```
+
+   This runs again in every job. If you need many tools, look for an image that already includes them.
+4. **Test it small.** Use `--gres=shard:1` and a short `--time` until the job starts properly.
+
 ---
 
 ### Examples
@@ -232,7 +258,16 @@ Changed your code? Run `gix upload my-project` again. It overwrites the files on
 ### Train a LeRobot policy
 
 Trains ACT on a dataset you recorded, inside the official LeRobot container.
-Tested with ACT and a LeRobot v3.0 dataset. Other policies and older datasets may need changes.
+Tested with a LeRobot v3.0 dataset. Older datasets may need changes.
+
+To change the policy, set `POLICY=` in `train.sbatch`. These were tested in short runs:
+
+| Policy | Result |
+|---|---|
+| `act`, `diffusion`, `vqbet`, `multi_task_dit` | Run from scratch |
+| `smolvla` | Runs with `--policy.pretrained_path=lerobot/smolvla_base`, about 900 MB of downloads |
+| `tdmpc` | Needs square images; fails on 640x480 video |
+| `pi05` | Needs a Hugging Face account with access to `google/paligemma-3b-pt-224`, and downloads about 14 GB first |
 
 **Step 1. Put your dataset in the example folder.** Name the folder `my-dataset`, and you don't
 need to edit anything:
@@ -273,6 +308,17 @@ gix download lerobot-act/outputs
 
 Your model is in `outputs/act-<job>/checkpoints/<step>/pretrained_model/`.
 
+**Continue from a checkpoint:** by default a checkpoint is saved every 20,000 steps and at the end, so work
+since the last checkpoint is lost if the job hits its `--time`. To continue, set `STEPS=` higher than the
+checkpoint's step, and add these two lines after `lerobot-train \` in `train.sbatch`, using your own job and step:
+
+```bash
+        --resume=true \
+        --config_path=outputs/act-<job>/checkpoints/<step>/pretrained_model/train_config.json \
+```
+
+New checkpoints go to a new `outputs/act-<new job>` folder, so keep the old one until you have what you need.
+
 **If it fails:** `ERROR: no LeRobot dataset at ...` means the dataset is in the wrong folder.
 The message lists the folders it found, so set `DATASET=` in `train.sbatch` to the right one.
 
@@ -304,9 +350,12 @@ Paths like `cifar10/train.sbatch` are always **relative to your cluster folder**
   GPU memory, use `gpu:1`.
 - **Time limit:** your job stops at the `--time` you asked for. Save checkpoints in `outputs/` during
   long runs, so you can continue from them.
+- **Memory (`--mem`):** always set it, as the examples do. A job without it reserves all of the node's RAM,
+  and other jobs have to wait even if the GPU has room.
 - **Saving results:** write everything you want to keep to your project folder (e.g. `outputs/`).
   Anything else inside the container is gone when the job ends.
-- **Internet:** jobs can download packages, models and datasets.
+- **Internet:** jobs can download packages, models and datasets. Installing packages is usually quick, but
+  it can occasionally stall for several minutes with no output. Your job still counts against its `--time`.
 - **Secrets:** don't put passwords or API keys in your cluster folder.
 - **Be fair:** cancel jobs you don't need (`gix cancel <job>`), so others can use the GPU.
 
@@ -338,6 +387,9 @@ Files you create there are on the GPU node, not in your cluster folder, so keep 
 | Job waits for a long time | All GPUs are busy. It starts by itself. `shard:1` and a shorter `--time` usually start sooner |
 | `CUDA out of memory` | Use `--gres=gpu:1`, or a smaller batch size |
 | Job stopped early | Check `gix logs <job>`. If it ran out of time, ask for a longer `--time` |
+| `Requested node configuration is not available` | You asked for more than one node has, such as `--gres=gpu:9`. Each node has 1 GPU (or 4 shards), up to 24 CPUs and up to 113 GB RAM |
+| `level=error msg="Refreshing container ... acquiring lock ...: file exists"` in the log | Seen on jobs that still ran normally. If your job carries on, you can ignore it |
+| `'NoneType' object has no attribute 'eglQueryString'` | The image has no `libEGL`, which headless rendering (e.g. MuJoCo) needs. Install `libegl` and `libgl` with `conda` and add that folder's `lib` to `LD_LIBRARY_PATH`, as in "If a tool or package is missing" |
 | Errors about your code / packages | `gix logs <job>` shows the error. Fix it on your laptop, `gix upload`, `gix submit` again |
 
 Still stuck? Send your TA the output of `gix status` and `gix logs <job>`.
